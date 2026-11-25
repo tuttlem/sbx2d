@@ -166,10 +166,43 @@ fn run(path: &Path) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                    println!(
-                        "started scene {scene_name} ({entity_count} entities, {asset_count} assets, {} rendered frame, capabilities: {capabilities})",
-                        renderer.frames.len()
+                    for step in 0..180 {
+                        runtime.tick(1.0 / 60.0);
+                        if step % 30 == 29 {
+                            if let Some(body) = runtime.physics.bodies.first() {
+                                println!(
+                                    "{{\"type\":\"physics_sample\",\"step\":{},\"id\":\"{}\",\"x\":{},\"y\":{},\"vy\":{},\"grounded\":{}}}",
+                                    step + 1,
+                                    body.entity_id,
+                                    body.position.x,
+                                    body.position.y,
+                                    body.velocity.y,
+                                    body.grounded
+                                );
+                            }
+                        }
+                    }
+                    let physics = format!(
+                        ", {} physics bodies, {} contacts",
+                        runtime.physics.bodies.len(),
+                        runtime.physics.contacts.len()
                     );
+                    println!(
+                        "started scene {scene_name} ({entity_count} entities, {asset_count} assets, {} rendered frame{physics}, capabilities: {capabilities})",
+                        renderer.frames.len(),
+                    );
+                    for body in &runtime.physics.bodies {
+                        println!(
+                            "{{\"type\":\"physics\",\"id\":\"{}\",\"x\":{},\"y\":{},\"vx\":{},\"vy\":{},\"grounded\":{},\"contacts\":{}}}",
+                            body.entity_id,
+                            body.position.x,
+                            body.position.y,
+                            body.velocity.x,
+                            body.velocity.y,
+                            body.grounded,
+                            runtime.physics.contacts.len()
+                        );
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -226,7 +259,9 @@ fn run_window(path: &Path) -> ExitCode {
         window: None,
         context,
         surface: None,
-        pixels: raster.pixels,
+        runtime,
+        assets,
+        raster,
     };
     match event_loop.run_app(&mut app) {
         Ok(()) => ExitCode::SUCCESS,
@@ -244,7 +279,9 @@ struct WindowApp {
     surface: Option<
         softbuffer::Surface<winit::event_loop::OwnedDisplayHandle, Arc<winit::window::Window>>,
     >,
-    pixels: Vec<u8>,
+    runtime: sbx2d_runtime::Runtime,
+    assets: sbx2d_runtime::AssetStore,
+    raster: sbx2d_runtime::RasterRenderer,
 }
 impl winit::application::ApplicationHandler for WindowApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -276,6 +313,9 @@ impl winit::application::ApplicationHandler for WindowApp {
         match event {
             winit::event::WindowEvent::CloseRequested => event_loop.exit(),
             winit::event::WindowEvent::RedrawRequested => {
+                self.runtime.tick(1.0 / 60.0);
+                let frame = self.runtime.render_frame();
+                self.raster.render_assets(&frame, &self.assets);
                 if let (Some(window), Some(surface)) = (&self.window, &mut self.surface) {
                     let size = window.inner_size();
                     if let (Some(width), Some(height)) =
@@ -285,10 +325,10 @@ impl winit::application::ApplicationHandler for WindowApp {
                             if let Ok(mut buffer) = surface.buffer_mut() {
                                 for (index, pixel) in buffer.iter_mut().enumerate() {
                                     let source = index * 4;
-                                    if source + 3 < self.pixels.len() {
-                                        let red = u32::from(self.pixels[source]);
-                                        let green = u32::from(self.pixels[source + 1]);
-                                        let blue = u32::from(self.pixels[source + 2]);
+                                    if source + 3 < self.raster.pixels.len() {
+                                        let red = u32::from(self.raster.pixels[source]);
+                                        let green = u32::from(self.raster.pixels[source + 1]);
+                                        let blue = u32::from(self.raster.pixels[source + 2]);
                                         *pixel = blue | (green << 8) | (red << 16);
                                     }
                                 }

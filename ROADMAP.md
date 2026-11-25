@@ -288,7 +288,7 @@ interfaces. `sbx2d-cli` composes both.
 **Exit criterion:** `sbx2d validate` accepts/rejects simple manifests with
 excellent errors and requires no windowing dependency.
 
-### Milestone 1 — Pack discovery and resolution
+### Milestone 1 — Pack discovery and resolution ✅
 
 - Discover `game.lua`, `common/`, worlds, scenes, and qualified definitions.
 - Resolve references and inheritance in a reproducible order.
@@ -298,7 +298,7 @@ excellent errors and requires no windowing dependency.
 **Exit criterion:** a multi-world pack validates fully and produces a resolved,
 serialisable definition graph.
 
-### Milestone 2 — Runtime shell
+### Milestone 2 — Runtime shell ✅
 
 - Choose/window backend and create cross-platform window/input loop.
 - Add runtime capability registry, lifecycle, scene instantiation, transforms,
@@ -308,7 +308,7 @@ serialisable definition graph.
 **Exit criterion:** a configured scene opens, renders a camera-visible sprite,
 and exits cleanly on all supported development platforms.
 
-### Milestone 3 — Fixed-step 2D physics
+### Milestone 3 — Fixed-step 2D physics ✅
 
 - Integrate the selected physics backend behind sbx2d-owned abstractions.
 - Add gravity, bodies, colliders, collision layers, sensors, contacts, and
