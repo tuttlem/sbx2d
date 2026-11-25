@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "crates/sbx2d-cli",
+    "crates/sbx2d-pack",
+    "crates/sbx2d-runtime",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Michael Tuttle"]
+rust-version = "1.85"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Diagnostics deliberately carry owned source context. Boxing every internal
+# parser result would obscure the error path without improving the public API.
+result_large_err = "allow"
+missing_errors_doc = "allow"
+needless_pass_by_value = "allow"
+
