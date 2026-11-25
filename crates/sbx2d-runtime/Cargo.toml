@@ -8,3 +8,4 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+sbx2d-pack = { path = "../sbx2d-pack" }

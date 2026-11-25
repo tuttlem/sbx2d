@@ -9,3 +9,5 @@ workspace = true
 
 [dependencies]
 sbx2d-pack = { path = "../sbx2d-pack" }
+sbx2d-runtime = { path = "../sbx2d-runtime" }
+winit = "0.30.13"

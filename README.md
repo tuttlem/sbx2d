@@ -20,6 +20,11 @@ The supported minimum Rust version is 1.85.0. Run `cargo fmt --all`,
   event/action interpreter.
 - `sbx2d-cli`: developer commands such as `validate`, `list-scenes`, and `run`.
 
+`sbx2d run <pack>` starts the validated active scene headlessly. Use
+`sbx2d run <pack> --window` to start the winit window/event-loop adapter; the
+current shell reports the active scene and render-item count in the title while
+the pixel renderer is being integrated.
+
 This workspace is intentionally dependency-free until the first vertical slice
 settles its public models and capability contracts.
 
