@@ -11,3 +11,4 @@ workspace = true
 sbx2d-pack = { path = "../sbx2d-pack" }
 sbx2d-runtime = { path = "../sbx2d-runtime" }
 winit = "0.30.13"
+softbuffer = "0.4.6"

@@ -77,7 +77,12 @@ pub struct ResolvedPack {
     pub worlds: BTreeMap<String, World>,
     pub scenes: BTreeMap<SceneReference, Scene>,
     pub definitions: BTreeMap<String, Definition>,
-    pub assets: BTreeMap<String, PathBuf>,
+    pub assets: BTreeMap<String, AssetSource>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssetSource {
+    File(PathBuf),
+    Rgb([u8; 3]),
 }
 
 pub fn load_manifest(input: impl AsRef<Path>) -> Result<Manifest, Diagnostic> {
@@ -239,12 +244,12 @@ pub fn to_json(pack: &ResolvedPack) -> String {
     let assets = pack
         .assets
         .iter()
-        .map(|(id, path)| {
-            format!(
-                "\"{}\":\"{}\"",
-                id,
-                json_string(&path.display().to_string())
-            )
+        .map(|(id, source)| {
+            let value = match source {
+                AssetSource::File(path) => path.display().to_string(),
+                AssetSource::Rgb(rgb) => format!("rgb({}, {}, {})", rgb[0], rgb[1], rgb[2]),
+            };
+            format!("\"{}\":\"{}\"", id, json_string(&value))
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -373,12 +378,32 @@ fn assets_in(
     path: &Path,
     source: &str,
     namespace: &str,
-    out: &mut BTreeMap<String, PathBuf>,
+    out: &mut BTreeMap<String, AssetSource>,
 ) -> Result<(), Diagnostic> {
     let Some(after) = source.split("assets = {").nth(1) else {
         return Ok(());
     };
-    let body = after.split('}').next().unwrap_or_default();
+    let body = after.split("}\n").next().unwrap_or_default();
+    if let Some(rgb) = source
+        .split("rgb = {")
+        .nth(1)
+        .and_then(|x| x.split('}').next())
+    {
+        let values = rgb
+            .split(',')
+            .filter_map(|x| x.trim().parse::<u8>().ok())
+            .collect::<Vec<_>>();
+        if values.len() == 3 {
+            let name = source
+                .split("assets = {")
+                .nth(1)
+                .and_then(|x| x.split('=').next())
+                .map_or("asset", str::trim);
+            let id = format!("{namespace}:{name}");
+            out.insert(id, AssetSource::Rgb([values[0], values[1], values[2]]));
+            return Ok(());
+        }
+    }
     for item in body.split(',') {
         let Some((name, value)) = item.split_once('=') else {
             continue;
@@ -396,6 +421,9 @@ fn assets_in(
                 "asset value must be a path string",
             ));
         }
+        if value.contains("rgb") {
+            continue;
+        }
         let target = path.parent().expect("file").join(value);
         if !target.is_file() {
             return Err(Diagnostic::new(
@@ -405,7 +433,7 @@ fn assets_in(
             ));
         }
         let id = format!("{namespace}:{name}");
-        if out.insert(id.clone(), target).is_some() {
+        if out.insert(id.clone(), AssetSource::File(target)).is_some() {
             return Err(Diagnostic::new(
                 path,
                 "SBX206",

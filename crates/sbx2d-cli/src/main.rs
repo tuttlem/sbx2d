@@ -1,5 +1,5 @@
 use sbx2d_runtime::Renderer;
-use std::{collections::BTreeMap, env, path::Path, process::ExitCode};
+use std::{collections::BTreeMap, env, num::NonZeroU32, path::Path, process::ExitCode, sync::Arc};
 
 fn main() -> ExitCode {
     let mut arguments = env::args_os();
@@ -200,6 +200,22 @@ fn run_window(path: &Path) -> ExitCode {
         }
     };
     let frame = runtime.render_frame();
+    let assets = match sbx2d_runtime::AssetStore::load(&pack) {
+        Ok(assets) => assets,
+        Err(error) => {
+            eprintln!("asset error: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut raster = sbx2d_runtime::RasterRenderer::new(960, 540);
+    raster.render_assets(&frame, &assets);
+    let context = match softbuffer::Context::new(event_loop.owned_display_handle()) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("surface error: {error}");
+            return ExitCode::from(1);
+        }
+    };
     let mut app = WindowApp {
         title: format!(
             "{} — {} ({} render items)",
@@ -208,6 +224,9 @@ fn run_window(path: &Path) -> ExitCode {
             frame.items.len()
         ),
         window: None,
+        context,
+        surface: None,
+        pixels: raster.pixels,
     };
     match event_loop.run_app(&mut app) {
         Ok(()) => ExitCode::SUCCESS,
@@ -220,12 +239,17 @@ fn run_window(path: &Path) -> ExitCode {
 
 struct WindowApp {
     title: String,
-    window: Option<winit::window::Window>,
+    window: Option<Arc<winit::window::Window>>,
+    context: softbuffer::Context<winit::event_loop::OwnedDisplayHandle>,
+    surface: Option<
+        softbuffer::Surface<winit::event_loop::OwnedDisplayHandle, Arc<winit::window::Window>>,
+    >,
+    pixels: Vec<u8>,
 }
 impl winit::application::ApplicationHandler for WindowApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.window.is_none() {
-            self.window = Some(
+            let window = Arc::new(
                 event_loop
                     .create_window(
                         winit::window::Window::default_attributes()
@@ -234,6 +258,10 @@ impl winit::application::ApplicationHandler for WindowApp {
                     )
                     .expect("window creation"),
             );
+            self.surface = Some(
+                softbuffer::Surface::new(&self.context, window.clone()).expect("surface creation"),
+            );
+            self.window = Some(window);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -248,7 +276,26 @@ impl winit::application::ApplicationHandler for WindowApp {
         match event {
             winit::event::WindowEvent::CloseRequested => event_loop.exit(),
             winit::event::WindowEvent::RedrawRequested => {
-                if let Some(window) = &self.window {
+                if let (Some(window), Some(surface)) = (&self.window, &mut self.surface) {
+                    let size = window.inner_size();
+                    if let (Some(width), Some(height)) =
+                        (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+                    {
+                        if surface.resize(width, height).is_ok() {
+                            if let Ok(mut buffer) = surface.buffer_mut() {
+                                for (index, pixel) in buffer.iter_mut().enumerate() {
+                                    let source = index * 4;
+                                    if source + 3 < self.pixels.len() {
+                                        let red = u32::from(self.pixels[source]);
+                                        let green = u32::from(self.pixels[source + 1]);
+                                        let blue = u32::from(self.pixels[source + 2]);
+                                        *pixel = blue | (green << 8) | (red << 16);
+                                    }
+                                }
+                                let _ = buffer.present();
+                            }
+                        }
+                    }
                     window.request_redraw();
                 }
             }

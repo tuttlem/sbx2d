@@ -1,5 +1,5 @@
 //! Platform-neutral runtime shell contracts.
-use sbx2d_pack::{ResolvedPack, SceneReference};
+use sbx2d_pack::{AssetSource, ResolvedPack, SceneReference};
 use std::{collections::BTreeMap, fmt, fs, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,9 +84,12 @@ pub struct AssetStore {
 impl AssetStore {
     pub fn load(pack: &ResolvedPack) -> Result<Self, RuntimeError> {
         let mut store = Self::default();
-        for (id, path) in &pack.assets {
-            let bytes =
-                fs::read(path).map_err(|_| RuntimeError::MissingAsset(id.clone(), path.clone()))?;
+        for (id, source) in &pack.assets {
+            let bytes = match source {
+                AssetSource::File(path) => fs::read(path)
+                    .map_err(|_| RuntimeError::MissingAsset(id.clone(), path.clone()))?,
+                AssetSource::Rgb(rgb) => rgb.to_vec(),
+            };
             store.bytes.insert(id.clone(), bytes);
         }
         Ok(store)
@@ -161,6 +164,49 @@ impl Renderer for RasterRenderer {
             self.draw_item(index, item);
         }
         Ok(())
+    }
+}
+impl RasterRenderer {
+    pub fn render_assets(&mut self, frame: &RenderFrame, assets: &AssetStore) {
+        self.clear();
+        for (index, item) in frame.items.iter().enumerate() {
+            let color = assets
+                .bytes
+                .get(&item.asset)
+                .map_or([80, 160, 240], |bytes| parse_color(bytes));
+            self.draw_item_color(index, item, color);
+        }
+    }
+    fn draw_item_color(&mut self, index: usize, item: &RenderItem, color: [u8; 3]) {
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        let x0 = (index * 32) % self.width.max(1);
+        let y0 = (index * 24) % self.height.max(1);
+        for y in y0..(y0 + 24).min(self.height) {
+            for x in x0..(x0 + 24).min(self.width) {
+                let offset = ((y * self.width + x) * 4) as usize;
+                self.pixels[offset..offset + 4].copy_from_slice(&[
+                    color[0],
+                    color[1],
+                    color[2],
+                    u8::from(item.visible) * 255,
+                ]);
+            }
+        }
+    }
+}
+fn parse_color(bytes: &[u8]) -> [u8; 3] {
+    let values = std::str::from_utf8(bytes).ok().map(|text| {
+        text.split_whitespace()
+            .filter_map(|part| part.parse::<u8>().ok())
+            .collect::<Vec<_>>()
+    });
+    match values.as_deref() {
+        Some([red, green, blue]) => [*red, *green, *blue],
+        _ => [
+            bytes.first().copied().unwrap_or(80),
+            bytes.get(1).copied().unwrap_or(160),
+            bytes.get(2).copied().unwrap_or(240),
+        ],
     }
 }
 impl RenderFrame {
