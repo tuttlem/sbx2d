@@ -203,6 +203,12 @@ fn run(path: &Path) -> ExitCode {
                             runtime.physics.contacts.len()
                         );
                     }
+                    println!(
+                        "{{\"type\":\"interaction\",\"score\":{},\"sounds\":{},\"trace\":{}}}",
+                        runtime.interactions.score,
+                        runtime.interactions.sounds.len(),
+                        runtime.interactions.trace.len()
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(error) => {

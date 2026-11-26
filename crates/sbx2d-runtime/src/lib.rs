@@ -503,6 +503,7 @@ pub struct Runtime {
     pub registry: CapabilityRegistry,
     pub active_scene: Option<ActiveScene>,
     pub physics: PhysicsWorld,
+    pub interactions: InteractionEngine,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -520,8 +521,10 @@ impl Runtime {
             registry,
             active_scene: None,
             physics: PhysicsWorld::default(),
+            interactions: InteractionEngine::default(),
         }
     }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn load_scene(
         &mut self,
         pack: &ResolvedPack,
@@ -546,6 +549,51 @@ impl Runtime {
         }
         let entities = scene_entities(&scene.source);
         self.physics.bodies = scene_bodies(&scene.source);
+        for line in scene.source.lines() {
+            if line.contains("health") {
+                if let (Some(id), Some(value)) =
+                    (inline_string(line, "id"), inline_number(line, "health"))
+                {
+                    self.interactions.health.insert(id, value as i32);
+                }
+            }
+            if line.contains("on_contact") {
+                let first = inline_string(line, "first");
+                let second = inline_string(line, "second");
+                if let (Some(first), Some(second), Some(score)) =
+                    (first.clone(), second.clone(), inline_number(line, "score"))
+                {
+                    self.interactions.on_contact(
+                        first,
+                        second,
+                        Action::AddScore {
+                            amount: score as i32,
+                        },
+                    );
+                }
+                if let (Some(first), Some(second), Some(effect)) =
+                    (first.clone(), second.clone(), inline_string(line, "sound"))
+                {
+                    self.interactions
+                        .on_contact(first, second, Action::PlaySound { effect });
+                }
+                if let (Some(first), Some(second), Some(target), Some(amount)) = (
+                    first,
+                    second,
+                    inline_string(line, "target"),
+                    inline_number(line, "damage"),
+                ) {
+                    self.interactions.on_contact(
+                        first,
+                        second,
+                        Action::Damage {
+                            target,
+                            amount: amount as i32,
+                        },
+                    );
+                }
+            }
+        }
         self.active_scene = Some(ActiveScene {
             reference: scene.reference.clone(),
             entities,
@@ -575,6 +623,168 @@ impl Runtime {
                     entity.transform.y = self.physics.interpolated_position(body).y;
                 }
             }
+        }
+        self.interactions.dispatch_contacts(&self.physics.contacts);
+        self.interactions
+            .process(&mut self.active_scene, &mut self.physics);
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Event {
+    Contact { first: String, second: String },
+    Damage { target: String, amount: i32 },
+    Sound { effect: String },
+    Score { amount: i32 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Action {
+    Damage {
+        target: String,
+        amount: i32,
+    },
+    PlaySound {
+        effect: String,
+    },
+    AddScore {
+        amount: i32,
+    },
+    Despawn {
+        entity: String,
+    },
+    SetVelocity {
+        entity: String,
+        velocity: Vec2,
+    },
+    ApplyImpulse {
+        entity: String,
+        impulse: Vec2,
+    },
+    AreaDamage {
+        center: Vec2,
+        radius: f32,
+        amount: i32,
+    },
+    Transition {
+        scene: SceneReference,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActionTrace {
+    pub event: Event,
+    pub action: Action,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct InteractionEngine {
+    pub health: BTreeMap<String, i32>,
+    pub score: i32,
+    pub queue: Vec<Action>,
+    pub trace: Vec<ActionTrace>,
+    pub sounds: Vec<String>,
+    pub next_scene: Option<SceneReference>,
+    pub contact_rules: BTreeMap<(String, String), Vec<Action>>,
+}
+impl InteractionEngine {
+    pub fn on_contact(
+        &mut self,
+        first: impl Into<String>,
+        second: impl Into<String>,
+        action: Action,
+    ) {
+        self.contact_rules
+            .entry((first.into(), second.into()))
+            .or_default()
+            .push(action);
+    }
+    pub fn dispatch_contacts(&mut self, contacts: &[Contact]) {
+        for contact in contacts {
+            let key = (contact.first.clone(), contact.second.clone());
+            if let Some(actions) = self.contact_rules.get(&key).cloned() {
+                for action in actions {
+                    self.emit(
+                        Event::Contact {
+                            first: contact.first.clone(),
+                            second: contact.second.clone(),
+                        },
+                        action,
+                    );
+                }
+            }
+        }
+    }
+    pub fn emit(&mut self, event: Event, action: Action) {
+        self.trace.push(ActionTrace {
+            event,
+            action: action.clone(),
+        });
+        self.queue.push(action);
+    }
+    pub fn process(&mut self, scene: &mut Option<ActiveScene>, physics: &mut PhysicsWorld) {
+        let actions = std::mem::take(&mut self.queue);
+        for action in actions {
+            match action {
+                Action::Damage { target, amount } => {
+                    let health = self.health.entry(target.clone()).or_insert(0);
+                    *health -= amount;
+                    if *health <= 0 {
+                        self.queue.push(Action::Despawn { entity: target });
+                    }
+                }
+                Action::PlaySound { effect } => self.sounds.push(effect),
+                Action::AddScore { amount } => self.score += amount,
+                Action::Despawn { entity } => {
+                    if let Some(active) = scene {
+                        active.entities.retain(|item| item.id != entity);
+                    }
+                    physics.bodies.retain(|body| body.entity_id != entity);
+                }
+                Action::SetVelocity { entity, velocity } => {
+                    if let Some(body) = physics
+                        .bodies
+                        .iter_mut()
+                        .find(|body| body.entity_id == entity)
+                    {
+                        body.velocity = velocity;
+                    }
+                }
+                Action::ApplyImpulse { entity, impulse } => {
+                    if let Some(body) = physics
+                        .bodies
+                        .iter_mut()
+                        .find(|body| body.entity_id == entity)
+                    {
+                        body.velocity.x += impulse.x / body.mass.max(0.001);
+                        body.velocity.y += impulse.y / body.mass.max(0.001);
+                    }
+                }
+                Action::AreaDamage {
+                    center,
+                    radius,
+                    amount,
+                } => {
+                    let radius_sq = radius.max(0.0).powi(2);
+                    for body in &physics.bodies {
+                        let dx = body.position.x - center.x;
+                        let dy = body.position.y - center.y;
+                        if dx * dx + dy * dy <= radius_sq {
+                            let health = self.health.entry(body.entity_id.clone()).or_insert(0);
+                            *health -= amount;
+                            if *health <= 0 {
+                                self.queue.push(Action::Despawn {
+                                    entity: body.entity_id.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+                Action::Transition { scene: target } => self.next_scene = Some(target),
+            }
+        }
+        if !self.queue.is_empty() {
+            self.process(scene, physics);
         }
     }
 }
@@ -909,6 +1119,134 @@ mod tests {
         assert_eq!(bodies[0].entity_id, "floor");
         assert_eq!(bodies[0].body_type, BodyType::Static);
         assert_eq!(bodies[0].position, Vec2 { x: 4.0, y: 8.0 });
+    }
+
+    #[test]
+    fn interaction_actions_damage_score_sound_and_despawn() {
+        let mut engine = InteractionEngine::default();
+        let mut scene = Some(ActiveScene {
+            reference: SceneReference {
+                namespace: "w".into(),
+                name: "s".into(),
+            },
+            entities: vec![Entity {
+                id: "crate".into(),
+                transform: Transform::default(),
+                sprite: None,
+            }],
+            camera: Camera::default(),
+        });
+        let mut physics = PhysicsWorld::default();
+        engine.health.insert("crate".into(), 3);
+        engine.emit(
+            Event::Damage {
+                target: "crate".into(),
+                amount: 3,
+            },
+            Action::Damage {
+                target: "crate".into(),
+                amount: 3,
+            },
+        );
+        engine.emit(Event::Score { amount: 10 }, Action::AddScore { amount: 10 });
+        engine.emit(
+            Event::Sound {
+                effect: "pop".into(),
+            },
+            Action::PlaySound {
+                effect: "pop".into(),
+            },
+        );
+        engine.process(&mut scene, &mut physics);
+        assert_eq!(engine.score, 10);
+        assert_eq!(engine.sounds, vec!["pop"]);
+        assert!(scene.unwrap().entities.is_empty());
+        assert_eq!(engine.trace.len(), 3);
+    }
+
+    #[test]
+    fn contact_rules_dispatch_damage_and_despawn() {
+        let mut engine = InteractionEngine::default();
+        engine.health.insert("crate".into(), 1);
+        engine.on_contact(
+            "hero",
+            "crate",
+            Action::Damage {
+                target: "crate".into(),
+                amount: 1,
+            },
+        );
+        engine.dispatch_contacts(&[Contact {
+            first: "hero".into(),
+            second: "crate".into(),
+        }]);
+        assert_eq!(engine.trace.len(), 1);
+        let mut scene = Some(ActiveScene {
+            reference: SceneReference {
+                namespace: "w".into(),
+                name: "s".into(),
+            },
+            entities: vec![Entity {
+                id: "crate".into(),
+                transform: Transform::default(),
+                sprite: None,
+            }],
+            camera: Camera::default(),
+        });
+        let mut physics = PhysicsWorld::default();
+        engine.process(&mut scene, &mut physics);
+        assert!(scene.unwrap().entities.is_empty());
+    }
+
+    #[test]
+    fn area_damage_affects_bodies_in_radius() {
+        let mut engine = InteractionEngine::default();
+        engine.health.insert("crate".into(), 2);
+        engine.emit(
+            Event::Damage {
+                target: "area".into(),
+                amount: 1,
+            },
+            Action::AreaDamage {
+                center: Vec2 { x: 0.0, y: 0.0 },
+                radius: 5.0,
+                amount: 2,
+            },
+        );
+        let mut scene = Some(ActiveScene {
+            reference: SceneReference {
+                namespace: "w".into(),
+                name: "s".into(),
+            },
+            entities: vec![Entity {
+                id: "crate".into(),
+                transform: Transform::default(),
+                sprite: None,
+            }],
+            camera: Camera::default(),
+        });
+        let mut physics = PhysicsWorld::default();
+        physics.bodies.push(PhysicsBody {
+            entity_id: "crate".into(),
+            body_type: BodyType::Dynamic,
+            position: Vec2 { x: 1.0, y: 1.0 },
+            previous_position: Vec2 { x: 1.0, y: 1.0 },
+            velocity: Vec2 { x: 0.0, y: 0.0 },
+            collider: Aabb {
+                half_width: 1.0,
+                half_height: 1.0,
+            },
+            gravity_scale: 1.0,
+            grounded: false,
+            layer: 1,
+            mask: u32::MAX,
+            sensor: false,
+            mass: 1.0,
+            friction: 0.0,
+            restitution: 0.0,
+        });
+        engine.process(&mut scene, &mut physics);
+        assert!(scene.unwrap().entities.is_empty());
     }
 
     #[test]

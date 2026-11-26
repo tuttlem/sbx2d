@@ -319,7 +319,7 @@ and exits cleanly on all supported development platforms.
 **Exit criterion:** a declaratively defined falling body collides reliably with
 a configured floor at varied rendering frame rates.
 
-### Milestone 4 — Declarative interaction engine
+### Milestone 4 — Declarative interaction engine ✅
 
 - Introduce typed events, conditions, action schemas, queues, and limits.
 - Implement health/damage, sound trigger, spawn/despawn, physics commands, and
